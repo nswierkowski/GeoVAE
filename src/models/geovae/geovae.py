@@ -5,16 +5,13 @@ import torch.nn.functional as F
 from torch_geometric.nn import GCNConv
 from typing import Dict, Tuple, Optional
 
-from src.models.treevi.pyg_tree import PyGTreeOptimizer
-from src.models.treevi.tree_variational_interface.tree_vi_structure.tree_vi import (
-    TreeStructure,
-)
+from src.models.geovae.geovae_optimizer import GeoVAEOptimizer
 from src.models.vae.vae import VAE
 
 
 class GeoVAE(nn.Module):
     """
-    VAE + PyG‐based TreeVI with GNN optimized structure.
+    VAE + TreeVI with GNN optimized structure.
     """
 
     def __init__(
@@ -57,7 +54,7 @@ class GeoVAE(nn.Module):
         self.dim_gnn_1 = GCNConv(emb_dim, hidden_dim_gnn)
         self.dim_gnn_2 = GCNConv(hidden_dim_gnn, 1)
 
-        self.tree_optimizer = PyGTreeOptimizer.GeoVAEOptimizer(
+        self.tree_optimizer = GeoVAEOptimizer(
             latent_dim=latent_dim, hidden_dim=hidden_dim_gnn, device=device
         )
 

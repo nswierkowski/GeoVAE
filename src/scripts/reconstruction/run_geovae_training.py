@@ -11,21 +11,22 @@ from src.training.Trainer import Trainer
 
 
 CONFIG = {
-    "input_dim": 1,
+    "input_dim": 3,
     "hidden_dim": 128,
     "residual_hiddens": 64,
     "lr": 1e-3,
     "weight_decay": 1e-4,
     "epochs": 30,
+    "image_size": 96,
     "device": "cuda" if torch.cuda.is_available() else "cpu",
     "mask_size": 0.0,
-    "param_grid": {"num_residual_layers": [1,2], "latent_dim": [64,128]},
+    "param_grid": {"num_residual_layers": [1], "latent_dim": [64]},
     "save_dir": Path("models/reconstruction/geovae/"),
     "dataset_config": {
         # Can be benchmark ("mnist", "fmnist", "stl10", "reuters") or Kaggle ("mahmudulhaqueshawon/cat-image")
-        "dataset_name": "mnist",
-        "raw_dir": "data/raw_data/MNIST/raw",
-        "split_dir": "data/data_splits/mnist",
+        "dataset_name": "stl10",
+        "raw_dir": "data/raw_data/stl10/raw",
+        "split_dir": "data/data_splits/stl10",
     },
     "use_mlflow": True
 }
@@ -71,6 +72,7 @@ def main():
             residual_hiddens=CONFIG["residual_hiddens"],
             num_residual_layers=layers,
             latent_dim=latent_dim,
+            image_size=CONFIG["image_size"]
         ).to(CONFIG["device"])
 
         loss_fn = nn.MSELoss(reduction="sum")
@@ -97,7 +99,7 @@ def main():
             "config": CONFIG,
         }
         with open(CONFIG["save_dir"] / f"{model_name}_config.json", "w") as f:
-            json.dump(config_out, f, indent=4)
+            json.dump(config_out, f, indent=4, default=str)
 
     print("Training and visualization complete.")
 

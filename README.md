@@ -1,11 +1,11 @@
 # Inpainting with Variational Autoencoders
 
-This project was developed as a final assignment for the **Probabilistic Graphical Models** course. Its goal is to explore and compare the performance of **variational autoencoder-based models** for the **image inpainting task** — reconstructing missing or masked parts of an image. We focus specifically on reconstructing images of cats with randomly applied masks using three advanced VAE models:
+Its goal is to explore and compare the performance of **variational autoencoder-based models** for the **image inpainting task** — reconstructing missing or masked parts of an image. We focus specifically on reconstructing images of cats with randomly applied masks using three advanced VAE models:
 
 * **Vanilla VAE** (as a baseline)
 * **VQ-VAE**
-* **AVAE**
 * **VAE + TreeVI**
+* **GeoVAE**
 
 The primary dataset used for training and evaluation comes from Kaggle:
 
@@ -36,7 +36,7 @@ pip install -r requirements.txt
 This will run the entire pipeline of downloading dataset, prerocessing and running training of every model:
 
 ```bash
-make reproduce
+make run_etl
 ```
 
 ### Example: Train the baseline VAE model
@@ -97,17 +97,6 @@ Used as a **baseline** due to its simplicity and strong theoretical foundations.
 * Used because it can **better preserve image structures** in reconstruction
 
 📄 Paper: [Neural Discrete Representation Learning (VQ-VAE)](https://arxiv.org/abs/1711.00937)
-
----
-
-### 3. **AVAE** (Auxiliary VAE)
-
-**AVAE** introduces auxiliary latent variables to improve the flexibility of the approximate posterior distribution, making inference more expressive and reducing the gap between the true and variational posterior.
-
-* Advantages: Richer latent representation, better reconstruction accuracy
-* Used because it **boosts inference quality** by extending posterior capacity
-
-📄 Paper: [Auxiliary Variational Autoencoders](https://arxiv.org/abs/2012.11551)
 
 ---
 

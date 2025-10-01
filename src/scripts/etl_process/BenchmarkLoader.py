@@ -26,7 +26,6 @@ class BenchmarkLoader:
         os.makedirs(self.split_dir, exist_ok=True)
 
     def _transform(self):
-        # Grayscale datasets: normalize to [0,1] then mean=0.5 std=0.5
         if self.dataset_name in ["mnist", "fmnist", "fashion-mnist"]:
             normalize = transforms.Normalize([0.5], [0.5])
             channels = 1
@@ -35,13 +34,11 @@ class BenchmarkLoader:
             channels = 3
 
         return transforms.Compose([
-            transforms.Resize((self.image_size, self.image_size)),
             transforms.ToTensor(),
             normalize,
         ])
 
     def _prepare_and_cache(self):
-        # Load dataset
         if self.dataset_name == "mnist":
             dataset = datasets.MNIST("data/benchmark", train=True, download=True, transform=self._transform())
         elif self.dataset_name in ["fmnist", "fashion-mnist"]:
@@ -51,7 +48,6 @@ class BenchmarkLoader:
         else:
             raise ValueError(f"Unsupported benchmark dataset: {self.dataset_name}")
 
-        # Split train/val/test
         train_size = int(0.8 * len(dataset))
         val_size = int(0.1 * len(dataset))
         test_size = len(dataset) - train_size - val_size
@@ -59,7 +55,6 @@ class BenchmarkLoader:
 
         for name, subset in zip(["train", "val", "test"], [train_ds, val_ds, test_ds]):
             images = torch.stack([subset[i][0] for i in range(len(subset))])
-            # Labels are ignored for reconstruction
             torch.save(images, os.path.join(self.split_dir, f"{name}.pt"))
             print(f"[INFO] Saved {name} split with {len(subset)} samples to {self.split_dir}")
 
@@ -68,7 +63,7 @@ class BenchmarkLoader:
         if not os.path.exists(path):
             self._prepare_and_cache()
         images = torch.load(path)
-        dataset = TensorDataset(images, images)  # input=target for reconstruction
+        dataset = TensorDataset(images, images)
         return DataLoader(dataset, batch_size=self.batch_size, shuffle=shuffle, num_workers=self.num_workers)
 
     def load(self):

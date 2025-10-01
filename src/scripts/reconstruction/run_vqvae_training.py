@@ -1,5 +1,6 @@
 from pathlib import Path
 import itertools
+import json
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -8,48 +9,55 @@ from src.scripts.etl_process.ETLProcessor import ETLProcessor
 from src.training.MaskDataset import MaskedDataset
 from src.training.Trainer import Trainer
 
-
 CONFIG = {
-    "input_dim": 3,
+    "input_dim": 1,
     "hidden_dim": 128,
     "residual_hiddens": 64,
     "lr": 1e-3,
     "weight_decay": 1e-4,
     "epochs": 30,
+    "image_size": 28,  
     "device": "cuda" if torch.cuda.is_available() else "cpu",
-    "mask_size": 0.35,
+    "mask_size": 0.0,
     "param_grid": {
-        "num_residual_layers": [2],
-        "num_embeddings": [32, 64],
-        "embedding_dim": [32, 64],
+    "num_residual_layers": [1],
+    "num_embeddings": [64],
+    "embedding_dim": [32],
     },
     "save_dir": Path("models/reconstruction/vqvae/"),
     "dataset_config": {
-        "kaggle_dataset": "mahmudulhaqueshawon/cat-image",
-        "raw_dir": "data/raw_data",
-        "split_dir": "data/data_splits",
-    },
+        # Can be benchmark ("mnist", "fmnist", "stl10", "reuters") or Kaggle ("mahmudulhaqueshawon/cat-image")
+        "dataset_name": "mnist",
+        "raw_dir": "data/raw_data/mnist/raw",
+        "split_dir": "data/data_splits/mnist",
+        },
+    "use_mlflow": True
 }
 
 CONFIG["vis_dir"] = CONFIG["save_dir"] / "metrics"
 CONFIG["save_dir"].mkdir(parents=True, exist_ok=True)
 CONFIG["vis_dir"].mkdir(parents=True, exist_ok=True)
 
-
 def main():
+    dataset_name = CONFIG["dataset_config"]["dataset_name"]
     print("Preparing data...")
+    print(f"Dataset: {dataset_name}")
     print(f"Using device: {CONFIG['device']}")
+    
     etl = ETLProcessor(**CONFIG["dataset_config"])
     train_loader, val_loader, _ = etl.process()
-    masked_val_ds = MaskedDataset(val_loader.dataset, CONFIG["mask_size"])
-    val_loader = DataLoader(
-        masked_val_ds,
-        batch_size=val_loader.batch_size,
-        shuffle=False,
-        num_workers=val_loader.num_workers,
-        pin_memory=val_loader.pin_memory,
-        drop_last=val_loader.drop_last,
-    )
+
+    if "/" in dataset_name: 
+        print("Applying masked dataset transformation for reconstruction...")
+        masked_val_ds = MaskedDataset(val_loader.dataset, CONFIG["mask_size"])
+        val_loader = DataLoader(
+            masked_val_ds,
+            batch_size=val_loader.batch_size,
+            shuffle=False,
+            num_workers=val_loader.num_workers,
+            pin_memory=val_loader.pin_memory,
+            drop_last=val_loader.drop_last,
+        )
 
     param_combinations = list(itertools.product(*CONFIG["param_grid"].values()))
     total_configs = len(param_combinations)
@@ -57,11 +65,7 @@ def main():
     print(f"Total configurations to run: {total_configs}")
 
     for i, (layers, num_embeddings, embedding_dim) in enumerate(param_combinations):
-        model_name = (
-            f"vqvae_layers{layers}_ne{num_embeddings}_ed{embedding_dim}".replace(
-                ".", ""
-            )
-        )
+        model_name = f"VQVAE_layers{layers}_ne{num_embeddings}_ed{embedding_dim}_dataset{dataset_name}".replace(".", "")
         print(f"\n[{i + 1}/{total_configs}] Running: {model_name}")
 
         model = VQVAE(
@@ -73,8 +77,7 @@ def main():
             embedding_dim=embedding_dim,
             commitment_cost=0.25,
             device=CONFIG["device"],
-        )
-        model = model.to(CONFIG["device"])
+        ).to(CONFIG["device"])
 
         loss_fn = nn.MSELoss()
 
@@ -91,7 +94,16 @@ def main():
             model_name=model_name,
             save_dir=CONFIG["save_dir"],
             vis_dir=CONFIG["vis_dir"],
+            use_mlflow=CONFIG["use_mlflow"]
         )
+
+        config_out = {
+            "model_name": model_name,
+            "dataset": dataset_name,
+            "config": CONFIG,
+        }
+        with open(CONFIG["save_dir"] / f"{model_name}_config.json", "w") as f:
+            json.dump(config_out, f, indent=4, default=str)
 
     print("Training and visualization complete.")
 

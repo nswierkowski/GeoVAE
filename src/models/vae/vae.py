@@ -1,9 +1,9 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from typing import Tuple
 from src.models.baseline.encoder import Encoder
 from src.models.baseline.decoder import Decoder
-
 
 class VAE(nn.Module):
     def __init__(
@@ -18,13 +18,10 @@ class VAE(nn.Module):
     ):
         super(VAE, self).__init__()
         self.device = device
-        self.to(device)
         self.hidden_dim = hidden_dim
         self.input_dim = input_dim
+        self.image_size = image_size
 
-        self._input_shape = (input_dim, image_size, image_size)
-
-        # Encoder
         self.encoder = Encoder(
             in_channels=input_dim,
             num_hiddens=hidden_dim,
@@ -32,21 +29,25 @@ class VAE(nn.Module):
             num_residual_hiddens=residual_hiddens,
         )
 
-        self._feature_map_size = image_size // 4
-        self._flat_dim = hidden_dim * self._feature_map_size * self._feature_map_size
+        with torch.no_grad():
+            dummy = torch.zeros(1, input_dim, image_size, image_size)
+            feat = self.encoder(dummy)
+            self._feature_shape = feat.shape[1:]   
+            self._flat_dim = feat.numel()
 
         self._fc_mu = nn.Linear(self._flat_dim, latent_dim)
         self._fc_logvar = nn.Linear(self._flat_dim, latent_dim)
 
         self._fc_decode = nn.Linear(latent_dim, self._flat_dim)
         self._decoder = Decoder(
-            in_channels=hidden_dim,
+            in_channels=self._feature_shape[0],
             num_hiddens=hidden_dim,
             num_residual_layers=num_residual_layers,
             num_residual_hiddens=residual_hiddens,
-            out_channels=input_dim, 
+            out_channels=input_dim,
         )
 
+        self.to(device)
 
     def _kl_divergence(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
         return -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
@@ -58,16 +59,13 @@ class VAE(nn.Module):
 
     def encode(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         x = self.encoder(x)
-        x = x.view(x.shape[0], -1)
+        x = x.view(x.size(0), -1)
         return self._fc_mu(x), self._fc_logvar(x)
 
     def decode(self, z: torch.Tensor) -> torch.Tensor:
         x = self._fc_decode(z)
-        x = x.view(
-            z.size(0), self.hidden_dim, self._feature_map_size, self._feature_map_size
-        )
-        x = self._decoder(x)  # output channels = input_dim
-        return x
+        x = x.view(z.size(0), *self._feature_shape)  
+        return self._decoder(x)
 
     def forward(self, x: torch.Tensor) -> dict:
         mu, logvar = self.encode(x)
@@ -80,3 +78,4 @@ class VAE(nn.Module):
         num_active_dims = (mean_kl_per_dim > 0.01).sum().item()
 
         return {"recon": recon, "partial_loss": kl, "num_active_dims": num_active_dims}
+
