@@ -16,76 +16,80 @@ class VQVAE(nn.Module):
         num_embeddings: int,
         embedding_dim: int,
         commitment_cost: float,
-        device: str,
+        device: str = "cuda" if torch.cuda.is_available() else "cpu",
+        image_size: int = 64,
     ):
         """
-        Vector Quantized Variational Autoencoder (VQVAE) for 64x64 RGB images.
+        VQVAE built on top of a VAE-style encoder/decoder backbone.
         Args:
-            input_dim (int): Number of input channels (3 for RGB).
-            hidden_dim (int): Number of hidden channels in encoder/decoder.
-            residual_hiddens (int): Hidden channels in residual blocks.
+            input_dim (int): Input channels (e.g., 1 for grayscale, 3 for RGB).
+            hidden_dim (int): Hidden channels in encoder/decoder.
+            residual_hiddens (int): Residual block hidden channels.
             num_residual_layers (int): Number of residual blocks.
-            num_embeddings (int): Number of embeddings in the codebook.
-            embedding_dim (int): Dimension of each embedding vector.
-            commitment_cost (float): Commitment cost for the VQ layer.
-            device (str): Device to run the model on ('cpu' or 'cuda').
+            num_embeddings (int): Size of the codebook.
+            embedding_dim (int): Dimensionality of embedding vectors.
+            commitment_cost (float): Weight for commitment loss.
+            device (str): "cuda" or "cpu".
+            image_size (int): Height/Width of the input images.
         """
         super(VQVAE, self).__init__()
-
         self.device = device
-        # Encoder
+        self.image_size = image_size
+
+        # Encoder (same as in VAE)
         self.encoder = Encoder(
             in_channels=input_dim,
             num_hiddens=hidden_dim,
             num_residual_layers=num_residual_layers,
             num_residual_hiddens=residual_hiddens,
         )
+
+        with torch.no_grad():
+            dummy = torch.zeros(1, input_dim, image_size, image_size)
+            feat = self.encoder(dummy)
+            self._feature_shape = feat.shape[1:]   
+
         self._pre_vq_conv = nn.Conv2d(
-            in_channels=hidden_dim, out_channels=embedding_dim, kernel_size=1, stride=1
+            in_channels=self._feature_shape[0],
+            out_channels=embedding_dim,
+            kernel_size=1,
+            stride=1
         )
 
-        # Codebook (Quantization Layer)
         self._vq_layer = Quantizer(
             num_embeddings=num_embeddings,
             embedding_dim=embedding_dim,
             commitment_cost=commitment_cost,
         )
 
-        # Decoder
+        # Decoder (same as in VAE)
         self.decoder = Decoder(
             in_channels=embedding_dim,
             num_hiddens=hidden_dim,
             num_residual_layers=num_residual_layers,
             num_residual_hiddens=residual_hiddens,
+            out_channels=input_dim,
         )
 
-    def forward(
-        self, x: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Forward pass for the VQVAE.
-        Args:
-            x (torch.Tensor): Input tensor - image of shape [Batch, Channels, Height, Width].
-        Returns:
-            Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-                - Reconstructed tensor of shape [Batch, Channels, Height, Width].
-                - Loss value for the quantization (commitment + codebook).
-                - One hot encoded indices of the closest embeddings. [B*H*W, num_embeddings]
-                - Perplexity of the quantization.
-        """
-        # Encoding
+        self.to(device)
+
+    def forward(self, x: torch.Tensor) -> dict:
         z = self.encoder(x)
         z = self._pre_vq_conv(z)
 
-        # Quantization
         quantized, quant_loss, encodings, perplexity = self._vq_layer(z)
 
-        # Decode quantized representation
-        reconstructed = self.decoder(quantized)
+        recon = self.decoder(quantized)
 
         return {
-            "recon": reconstructed,
+            "recon": recon,
             "partial_loss": quant_loss,
-            "num_active_dims": perplexity,
+            "num_active_dims": perplexity,  
             "encodings": encodings,
         }
+        
+    def encode(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        z = self.encoder(x)
+        z = self._pre_vq_conv(z)
+        return z, None
+

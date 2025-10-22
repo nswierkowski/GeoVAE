@@ -2,16 +2,24 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import GCNConv
-from typing import Dict, Tuple, Optional
+from torch_geometric.nn import GCNConv, GATConv, GraphSAGE
+from typing import Dict, Tuple
+from enum import Enum
 
 from src.models.geovae.geovae_optimizer import GeoVAEOptimizer
 from src.models.vae.vae import VAE
 
 
+class GraphConvType(Enum):
+    GCN = 1
+    GAT = 2
+    GST = 3  
+
+
 class GeoVAE(nn.Module):
     """
-    VAE + TreeVI with GNN optimized structure.
+    GeoVAE: Variational Autoencoder with instance-level and dimension-level GNN
+    that can use different convolution types (GCN, GAT, GraphSAGE).
     """
 
     def __init__(
@@ -27,12 +35,13 @@ class GeoVAE(nn.Module):
         optimizer_config: dict = {},
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
         image_size: int = 64,
+        graph_conv_type: GraphConvType = GraphConvType.GCN,
     ):
         super(GeoVAE, self).__init__()
         self.device = device
         self.latent_dim = latent_dim
+        self.graph_conv_type = graph_conv_type
 
-        # Vanilla VAE
         self.vanilla_vae = VAE(
             input_dim=input_dim,
             hidden_dim=hidden_dim,
@@ -43,16 +52,23 @@ class GeoVAE(nn.Module):
             image_size=image_size,
         )
 
-        # Instance-level GNN
+        if graph_conv_type == GraphConvType.GCN:
+            ConvLayer = GCNConv
+        elif graph_conv_type == GraphConvType.GAT:
+            ConvLayer = lambda in_c, out_c: GATConv(in_c, out_c, heads=1, concat=False)
+        elif graph_conv_type == GraphConvType.GST:
+            ConvLayer = lambda in_c, out_c: GraphSAGE(in_c, out_c, num_layers=1) 
+        else:
+            raise ValueError(f"Unsupported graph_conv_type: {graph_conv_type}")
+
         self.inst_convs = nn.ModuleList(
-            [GCNConv(latent_dim, latent_dim) for _ in range(num_inst_gnn_layers)]
+            [ConvLayer(latent_dim, latent_dim) for _ in range(num_inst_gnn_layers)]
         )
 
-        # Dimensional GNN
         self.dim_adj_logits = nn.Parameter(torch.randn(latent_dim, latent_dim))
         self.dim_embeddings = nn.Parameter(torch.randn(latent_dim, emb_dim))
-        self.dim_gnn_1 = GCNConv(emb_dim, hidden_dim_gnn)
-        self.dim_gnn_2 = GCNConv(hidden_dim_gnn, 1)
+        self.dim_gnn_1 = ConvLayer(emb_dim, hidden_dim_gnn)
+        self.dim_gnn_2 = ConvLayer(hidden_dim_gnn, 1)
 
         self.tree_optimizer = GeoVAEOptimizer(
             latent_dim=latent_dim, hidden_dim=hidden_dim_gnn, device=device
@@ -60,14 +76,9 @@ class GeoVAE(nn.Module):
 
         self.current_inst_edge_index = None
         self.current_gamma_dict = {}
-        
 
     def _init_chain_tree_edge_index(self, num_nodes: int) -> torch.LongTensor:
-        """
-        Create a simple chain of nodes for num_nodes. Returns bidirected edge_index of size: [2, 2*(num_nodes-1)].
-        """
-        src = []
-        dst = []
+        src, dst = [], []
         for i in range(num_nodes - 1):
             src += [i, i + 1]
             dst += [i + 1, i]
@@ -83,27 +94,18 @@ class GeoVAE(nn.Module):
     def compute_instance_gnn(
         self, mu: torch.Tensor, edge_index: torch.LongTensor
     ) -> torch.Tensor:
-        """
-        Passes mu:[B,D] through several GCNConv layers according to edge_index: [2, E].
-        Returns v_inst: [B,D].
-        """
         h = mu
         for conv in self.inst_convs:
-            h = F.relu(conv(h, edge_index))
+            h = F.leaky_relu(conv(h, edge_index))
         return h
 
-    def compute_dim_gnn(self) -> torch.Tensor:
-        """
-        Create a graph of latent dimensions: dim_adj_logits → binarne edge_index_dim.
-        Passes dim_embeddings: [D, emb_dim] through 2 layers of GCNConv and returns dim_importance: [D].
-        """
+    def compute_dim_gnn(self, mask_threshold: float = 0.6) -> torch.Tensor:
         D = self.latent_dim
-
         adj_logits = self.dim_adj_logits + self.dim_adj_logits.t()
         adj_logits.fill_diagonal_(0.0)
         adj_probs = torch.sigmoid(adj_logits)
 
-        mask = (adj_probs > 0.5).float()
+        mask = (adj_probs > mask_threshold).float()
         src, dst = torch.nonzero(mask, as_tuple=True)
         if src.numel() == 0:
             temp = torch.ones((D, D), device=self.device)
@@ -112,10 +114,9 @@ class GeoVAE(nn.Module):
         edge_index_dim = torch.stack([src, dst], dim=0)
 
         x_dim = self.dim_embeddings
-        x_dim = F.relu(self.dim_gnn_1(x_dim, edge_index_dim))
+        x_dim = F.leaky_relu(self.dim_gnn_1(x_dim, edge_index_dim))
         x_dim = self.dim_gnn_2(x_dim, edge_index_dim)
         dim_importance = x_dim.squeeze(1)
-
         return dim_importance
 
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
@@ -132,11 +133,8 @@ class GeoVAE(nn.Module):
         dim_importance = self.compute_dim_gnn()
 
         v = v_inst * dim_importance.view(1, -1)
-        
         eps = torch.randn_like(mu)
         z = mu + sigma * (eps * v)
-        
-        #z = mu + sigma * v
         recon = self.decode(z)
 
         log_px_z = -F.mse_loss(recon, x, reduction="sum")

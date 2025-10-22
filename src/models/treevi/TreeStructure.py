@@ -1,10 +1,5 @@
 from typing import Dict, List, Optional, Tuple
 import torch
-from src.models.treevi.tree_variational_interface.vi_structure import VIStructure
-
-from typing import Dict, List, Optional, Tuple
-import torch
-from src.models.treevi.tree_variational_interface.vi_structure import VIStructure
 
 class TreeStructure():
     """
@@ -28,10 +23,10 @@ class TreeStructure():
         edge_list: List[Tuple[int, int]],
         gamma_dict: Dict[Tuple[int, int], torch.Tensor],
     ) -> None:
-        self.adj_matrix = adj_matrix  # assumed binary, dtype=torch.int or float
+        self.adj_matrix = adj_matrix 
         self.edge_list = edge_list
         self.gamma = (
-            gamma_dict  # mapping: (parent, child) -> torch.Tensor of shape [latent_dim]
+            gamma_dict  
         )
 
         self.parent_map = {}  # child -> parent

@@ -21,6 +21,7 @@ class VAE(nn.Module):
         self.hidden_dim = hidden_dim
         self.input_dim = input_dim
         self.image_size = image_size
+        self.latent_dim = latent_dim 
 
         self.encoder = Encoder(
             in_channels=input_dim,

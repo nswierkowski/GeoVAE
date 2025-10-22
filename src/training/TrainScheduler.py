@@ -135,7 +135,6 @@ class TrainScheduler:
         while used_epochs < max_epochs:
             print(f"\n[AUTO] Epochs used: {used_epochs}/{max_epochs}")
 
-            # Create subset of dataset
             subset_size = int(len(full_train_data) * current_data_frac)
             indices = torch.randperm(len(full_train_data))[:subset_size]
             subset = torch.utils.data.Subset(full_train_data, indices)

@@ -229,9 +229,62 @@ class Trainer:
         save_dir: str,
         vis_dir: str,
         tensorboard: bool = False,
-        use_mlflow: bool = True
+        use_mlflow: bool = True,
+        checkpoint_every: int = 5,
+        resume: bool = False,
+        resume_from_cpkt: str = None,  
     ) -> None:
-        
+        """
+        Supervised training loop with checkpointing and resume support.
+
+        Args:
+            model: The model to train.
+            epochs: Total number of epochs.
+            train_loader: Training dataloader.
+            val_loader: Validation dataloader.
+            lr, weight_decay: Optimizer hyperparameters.
+            mask_ratio: Random masking ratio.
+            loss_fn: Loss function.
+            model_name: Model name for saving/logging.
+            save_dir, vis_dir: Directories for saving checkpoints and plots.
+            tensorboard: Enable tensorboard logging.
+            use_mlflow: Enable MLflow logging.
+            checkpoint_every: Save checkpoint every N epochs.
+            resume: Resume from the latest default checkpoint.
+            resume_from_cpkt: Optional path to a specific checkpoint to resume from.
+        """
+        os.makedirs(save_dir, exist_ok=True)
+
+        # --- Paths setup ---
+        default_cpkt_path = os.path.join(save_dir, f"{model_name}_checkpoint.pt")
+        best_model_path = os.path.join(save_dir, f"{model_name}.pt")
+
+        checkpoint_path = (
+            resume_from_cpkt if resume_from_cpkt is not None else default_cpkt_path
+        )
+
+        # --- Initialize optimizer and metrics ---
+        optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+        train_metrics, val_metrics = self._initialize_metrics()
+        start_epoch = 0
+        best_val_loss = float("inf")
+
+        # --- Load checkpoint if requested ---
+        if resume or resume_from_cpkt is not None:
+            if os.path.exists(checkpoint_path):
+                print(f"🔁 Resuming training from checkpoint: {checkpoint_path}")
+                checkpoint = torch.load(checkpoint_path, map_location=model.device)
+                model.load_state_dict(checkpoint["model_state_dict"])
+                optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+                start_epoch = checkpoint["epoch"] + 1
+                best_val_loss = checkpoint.get("best_val_loss", float("inf"))
+                print(
+                    f"✅ Resumed from epoch {start_epoch}, best_val_loss={best_val_loss:.6f}"
+                )
+            else:
+                print(f"⚠️ Checkpoint not found: {checkpoint_path}. Starting from scratch.")
+
+        # --- MLflow setup ---
         if use_mlflow:
             mlflow.start_run(run_name=model_name)
             mlflow.log_params({
@@ -240,46 +293,54 @@ class Trainer:
                 "mask_ratio": mask_ratio,
                 "epochs": epochs,
                 "model_name": model_name,
+                "checkpoint_every": checkpoint_every,
+                "resume_from_cpkt": resume_from_cpkt or "default",
             })
 
-        train_metrics, val_metrics = self._initialize_metrics()
-        optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+        writer = SummaryWriter(log_dir=f"logs/{model_name}", flush_secs=30) if tensorboard else None
 
-        best_val_loss = float("inf")
-        writer = SummaryWriter(
-            log_dir=f"logs/{model_name}",
-            flush_secs=30,
-        ) if tensorboard else None
-
-        for epoch in range(epochs):
+        # --- Training loop ---
+        for epoch in range(start_epoch, epochs):
             print(f"Epoch {epoch + 1}/{epochs}")
             start_time = time.time()
-            self._train_epoch(
-                model,
-                train_loader,
-                optimizer,
-                loss_fn,
-                train_metrics,
-                mask_ratio,
-            )
-            train_metrics['time'].append(time.time() - start_time)
+
+            self._train_epoch(model, train_loader, optimizer, loss_fn, train_metrics, mask_ratio)
+            train_metrics["time"].append(time.time() - start_time)
+
             start_val_time = time.time()
-            loss = self._validate_model(model, val_loader, loss_fn, val_metrics, writer=writer, n_epoch=epoch)
-            val_metrics['time'].append(time.time() - start_val_time)
+            val_loss = self._validate_model(model, val_loader, loss_fn, val_metrics, writer=writer, n_epoch=epoch)
+            val_metrics["time"].append(time.time() - start_val_time)
+
             train_metrics["step"].append(epoch)
             val_metrics["step"].append(epoch)
-            if loss < best_val_loss:
-                best_val_loss = loss
-                torch.save(model.state_dict(), f"{save_dir}/{model_name}.pt")
-                
+
+            # --- Save best model ---
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                torch.save(model.state_dict(), best_model_path)
+                print(f"💾 New best model saved at epoch {epoch + 1}: val_loss={val_loss:.6f}")
+
+            # --- Save checkpoint every N epochs ---
+            if (epoch + 1) % checkpoint_every == 0:
+                checkpoint_to_save = os.path.join(save_dir, f"{model_name}_checkpoint.pt")
+                torch.save({
+                    "epoch": epoch,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "best_val_loss": best_val_loss,
+                }, checkpoint_to_save)
+                print(f"📦 Checkpoint saved at epoch {epoch + 1} -> {checkpoint_to_save}")
+
+            # --- Log to MLflow ---
             if use_mlflow:
                 mlflow.log_metric("train_loss", train_metrics["loss"][-1], step=epoch)
                 mlflow.log_metric("val_loss", val_metrics["loss"][-1], step=epoch)
                 mlflow.log_metric("train_mse", train_metrics["mse"][-1], step=epoch)
                 mlflow.log_metric("val_mse", val_metrics["mse"][-1], step=epoch)
 
+        # --- Plot & log results ---
         self.plot_metrics(train_metrics, val_metrics, vis_dir, model_name)
-        
+
         if use_mlflow:
             mlflow.pytorch.log_model(model, artifact_path="models")
             metrics_plot_path = os.path.join(vis_dir, f"{model_name}_metrics.png")

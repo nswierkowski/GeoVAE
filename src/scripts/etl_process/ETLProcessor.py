@@ -30,7 +30,9 @@ class ETLProcessor:
         self.split_dir = split_dir
 
     def process(self):
-        if self.dataset_name in ["mnist", "fmnist", "fashion-mnist", "stl10", "reuters"]:
+        BENCHMARK_DATASETS = {"mnist", "fmnist", "fashion-mnist", "stl10", "celeba", "reuters"}
+
+        if self.dataset_name in BENCHMARK_DATASETS:
             benchmark_loader = BenchmarkLoader(self.dataset_name, split_dir=self.split_dir)
             return benchmark_loader.load()
 
@@ -42,6 +44,7 @@ class ETLProcessor:
             os.path.exists(os.path.join(self.split_dir, f"{s}.json"))
             for s in ["train", "val", "test"]
         ):
+            print('Splitting...')
             splitter.split()
 
         transformer = DataTransformer()

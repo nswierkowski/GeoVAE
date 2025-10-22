@@ -64,21 +64,12 @@ class TreeOptimizer:
         )
         return lagrangian
 
-    def optimize_tree(
-        self, initial_tree: TreeStructure, embeddings: Optional[torch.Tensor] = None
-    ) -> TreeStructure:
-        # Get initial adjacency matrix A from the initial tree; ensure it's a float tensor on the proper device.
-        A_init = initial_tree.adj_matrix.clone().detach().to(self.device).float()
-        # Make A a parameter to be optimized.
-        A_opt = A_init.clone().detach().requires_grad_(True)
-
-        # Set up an LBFGS optimizer to update A.
+    def optimize_tree(self, initial_tree: TreeStructure, embeddings: Optional[torch.Tensor] = None) -> TreeStructure:
+        A_opt = initial_tree.adj_matrix.to(self.device, dtype=torch.float32).requires_grad_(True)
         optimizer = optim.LBFGS([A_opt], lr=self.lbfgs_lr, max_iter=self.lbfgs_max_iter)
 
-        # Outer iterative optimization loop using augmented Lagrangian method.
-        for iteration in range(self.max_iterations):
-
-            def closure() -> torch.Tensor:
+        for _ in range(self.max_iterations):
+            def closure():
                 optimizer.zero_grad()
                 L_aug = self._augmented_lagrangian(A_opt)
                 L_aug.backward()
@@ -86,50 +77,21 @@ class TreeOptimizer:
 
             optimizer.step(closure)
 
-            # After the LBFGS step, evaluate h(A)
             with torch.no_grad():
-                h_val = self._h_function(A_opt).item()
-            # Dual ascent update of the dual variable.
-            self.dual_variable += self.penalty_parameter * h_val
+                h_val = self._h_function(A_opt)
+                self.dual_variable += self.penalty_parameter * h_val
+                if torch.abs(h_val) < self.tolerance:
+                    break
 
-            # Check convergence of h(A).
-            if abs(h_val) < self.tolerance:
-                # Convergence achieved.
-                break
-
-        # Post-processing: Threshold A to obtain a binary matrix.
         with torch.no_grad():
-            A_thresholded = A_opt.clone()
-            A_thresholded[torch.abs(A_thresholded) < self.threshold] = 0.0
-            # Create binary matrix: set nonzero entries to 1.0.
-            A_binary = (torch.abs(A_thresholded) >= self.threshold).float()
+            A_binary = (A_opt.abs() >= self.threshold).float()
+            nonzero_indices = (A_binary.triu(1) > 0).nonzero(as_tuple=False)
 
-        # Convert the optimized binary adjacency matrix A_binary to a numpy array for edge list processing.
-        A_np = A_binary.detach().cpu().numpy()
-        num_nodes = A_np.shape[0]
-        edge_list: List[Tuple[int, int]] = []
-        gamma_dict: Dict[Tuple[int, int], torch.Tensor] = {}
-        # To assign a unique parent for each node (except the root), we pick the first encountered edge
-        parent_assigned: Dict[int, int] = {}
-        for i in range(num_nodes):
-            for j in range(i + 1, num_nodes):
-                if A_np[i, j] != 0:
-                    # Assign i as parent of j if not already assigned.
-                    if j not in parent_assigned:
-                        parent_assigned[j] = i
-                        edge_list.append((i, j))
-                        # Set gamma for edge (i, j) as the corresponding optimized value,
-                        # clamped to (-0.99, 0.99) and output as a tensor.
-                        gamma_val = float(A_np[i, j])
-                        gamma_val_clamped = max(min(gamma_val, 0.99), -0.99)
-                        # For simplicity, we assume latent dimension 1 (or can be extended to vectorized gamma).
-                        gamma_tensor = torch.tensor(
-                            [gamma_val_clamped], dtype=torch.float32, device=self.device
-                        )
-                        gamma_dict[(i, j)] = gamma_tensor
+            edge_list = [(int(i), int(j)) for i, j in nonzero_indices.tolist()]
+            gamma_dict = {
+                (int(i), int(j)): torch.clamp(A_opt[i, j], -0.99, 0.99).unsqueeze(0)
+                for i, j in nonzero_indices.tolist()
+            }
 
-        # Create a new TreeStructure with the optimized binary adjacency matrix, edge list, and gamma_dict.
-        new_tree = TreeStructure(
-            adj_matrix=A_binary.detach(), edge_list=edge_list, gamma_dict=gamma_dict
-        )
-        return new_tree
+        return TreeStructure(adj_matrix=A_binary, edge_list=edge_list, gamma_dict=gamma_dict)
+

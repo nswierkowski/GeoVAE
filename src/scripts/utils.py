@@ -9,16 +9,18 @@ import numpy as np
 from skimage.metrics import structural_similarity as compare_ssim
 from skimage.metrics import peak_signal_noise_ratio as compare_psnr
 
-def get_test_loader():
+def get_test_loader(dataset_name="mahmudulhaqueshawon/cat-image",
+        raw_dir="data/raw_data",
+        split_dir="data/data_splits"):
     """
     Get the test DataLoader for the cat image dataset.
     Returns:
         DataLoader: DataLoader for the test dataset.
     """
     etl = ETLProcessor(
-        dataset_name="mahmudulhaqueshawon/cat-image",
-        raw_dir="data/raw_data",
-        split_dir="data/data_splits",
+        dataset_name=dataset_name,
+        raw_dir=raw_dir,
+        split_dir=split_dir,
     )
     _, _, test_loader = etl.process()
     mask_size = 0.3
@@ -28,6 +30,28 @@ def get_test_loader():
     )
 
     return test_loader
+
+def get_train_loader(dataset_name="mahmudulhaqueshawon/cat-image",
+        raw_dir="data/raw_data",
+        split_dir="data/data_splits"):
+    """
+    Get the test DataLoader for the cat image dataset.
+    Returns:
+        DataLoader: DataLoader for the test dataset.
+    """
+    etl = ETLProcessor(
+        dataset_name=dataset_name,
+        raw_dir=raw_dir,
+        split_dir=split_dir,
+    )
+    train, _, _ = etl.process()
+    mask_size = 0.35
+    mask_test_dataset = MaskedDataset(train.dataset, mask_size)
+    train = torch.utils.data.DataLoader(
+        mask_test_dataset, batch_size=32, shuffle=False
+    )
+
+    return train
 
 def evaluate_model(model, test_loader, device):
     """

@@ -4,11 +4,10 @@ import json
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from src.models.treevi.pyg_tree.PygTreeVAE import GeoVAE
+from src.models.geovae.geovae import GeoVAE, GraphConvType
 from src.scripts.etl_process.ETLProcessor import ETLProcessor
 from src.training.MaskDataset import MaskedDataset
-from src.training.Trainer import Trainer
-
+from src.training.Trainer import Trainer  
 
 CONFIG = {
     "input_dim": 3,
@@ -17,18 +16,19 @@ CONFIG = {
     "lr": 1e-3,
     "weight_decay": 1e-4,
     "epochs": 30,
-    "image_size": 96,
+    "image_size": 64,
     "device": "cuda" if torch.cuda.is_available() else "cpu",
-    "mask_size": 0.0,
+    "mask_size": 0.35,
     "param_grid": {"num_residual_layers": [1], "latent_dim": [64]},
     "save_dir": Path("models/reconstruction/geovae/"),
     "dataset_config": {
-        # Can be benchmark ("mnist", "fmnist", "stl10", "reuters") or Kaggle ("mahmudulhaqueshawon/cat-image")
-        "dataset_name": "stl10",
-        "raw_dir": "data/raw_data/stl10/raw",
-        "split_dir": "data/data_splits/stl10",
+        "dataset_name": "mahmudulhaqueshawon/cat-image",
+        "raw_dir": "data/raw_data/cats/raw",
+        "split_dir": "data/data_splits/cats",
     },
-    "use_mlflow": True
+    "use_mlflow": True,
+    "mask_random_state": 42,
+    "graph_conv": GraphConvType.GST
 }
 
 CONFIG["vis_dir"] = CONFIG["save_dir"] / "metrics"
@@ -45,9 +45,19 @@ def main():
     etl = ETLProcessor(**CONFIG["dataset_config"])
     train_loader, val_loader, _ = etl.process()
 
-    if "/" in dataset_name: 
-        print("Applying masked dataset transformation for reconstruction...")
-        masked_val_ds = MaskedDataset(val_loader.dataset, CONFIG["mask_size"])
+    if CONFIG["mask_size"] > 0:
+        print(f"Applying masked dataset transformation with mask ratio = {CONFIG['mask_size']}")
+        masked_train_ds = MaskedDataset(train_loader.dataset, CONFIG["mask_size"], random_state=CONFIG["mask_random_state"])
+        masked_val_ds = MaskedDataset(val_loader.dataset, CONFIG["mask_size"], random_state=CONFIG["mask_random_state"])
+
+        train_loader = DataLoader(
+            masked_train_ds,
+            batch_size=train_loader.batch_size,
+            shuffle=True,
+            num_workers=train_loader.num_workers,
+            pin_memory=train_loader.pin_memory,
+            drop_last=train_loader.drop_last,
+        )
         val_loader = DataLoader(
             masked_val_ds,
             batch_size=val_loader.batch_size,
@@ -59,25 +69,33 @@ def main():
 
     param_combinations = list(itertools.product(*CONFIG["param_grid"].values()))
     total_configs = len(param_combinations)
-
     print(f"Total configurations to run: {total_configs}")
 
+    trainer = Trainer()
+
     for i, (layers, latent_dim) in enumerate(param_combinations):
-        model_name = f"GeoVAE_layers{layers}_latent{latent_dim}_dataset{dataset_name}".replace(".", "")
+        model_name = f"GeoVAE_layers{layers}_latent{latent_dim}_dataset{dataset_name}_graph_conv{CONFIG['graph_conv']}".replace(".", "").replace("/", "_")
         print(f"\n[{i + 1}/{total_configs}] Running: {model_name}")
 
+        # === Model ===
         model = GeoVAE(
             input_dim=CONFIG["input_dim"],
             hidden_dim=CONFIG["hidden_dim"],
             residual_hiddens=CONFIG["residual_hiddens"],
             num_residual_layers=layers,
             latent_dim=latent_dim,
-            image_size=CONFIG["image_size"]
+            image_size=CONFIG["image_size"],
+            graph_conv_type=CONFIG["graph_conv"]
         ).to(CONFIG["device"])
 
+        # Supervised loss: reconstruction MSE
         loss_fn = nn.MSELoss(reduction="sum")
 
-        trainer = Trainer()
+        # Resume from last checkpoint if exists
+        ckpt_files = sorted(CONFIG["save_dir"].glob(f"{model_name}_ckpt_epoch*.pt"))
+        resume_ckpt = ckpt_files[-1] if ckpt_files else None
+
+        # === Train ===
         trainer.train_supervised(
             model=model,
             epochs=CONFIG["epochs"],
@@ -90,9 +108,11 @@ def main():
             model_name=model_name,
             save_dir=CONFIG["save_dir"],
             vis_dir=CONFIG["vis_dir"],
-            use_mlflow=CONFIG["use_mlflow"]
+            use_mlflow=CONFIG["use_mlflow"],
+            resume_from_cpkt=resume_ckpt
         )
 
+        # Save configuration
         config_out = {
             "model_name": model_name,
             "dataset": dataset_name,

@@ -4,7 +4,8 @@ import json
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from src.models.vae.vae import VAE
+
+from src.models.dummy_geovae.geovae import DummyGeoVAE
 from src.scripts.etl_process.ETLProcessor import ETLProcessor
 from src.training.MaskDataset import MaskedDataset
 from src.training.Trainer import Trainer
@@ -21,14 +22,14 @@ CONFIG = {
     "device": "cuda" if torch.cuda.is_available() else "cpu",
     "mask_size": 0.35,
     "param_grid": {"num_residual_layers": [1], "latent_dim": [64]},
-    "save_dir": Path("models/reconstruction/geovae/"),
+    "save_dir": Path("models/reconstruction/dummy_geovae/"),
     "dataset_config": {
-        "dataset_name": "thetthetyee/celaba-face-recognition",
-        "raw_dir": "data/raw_data/celaba/raw",
-        "split_dir": "data/data_splits/celaba",
+        # Can be benchmark ("mnist", "fmnist", "stl10", "reuters") or Kaggle ("mahmudulhaqueshawon/cat-image")
+        "dataset_name": "mahmudulhaqueshawon/cat-image",
+        "raw_dir": "data/raw_data/cats/raw",
+        "split_dir": "data/data_splits/cats",
     },
-    "use_mlflow": True,
-    "mask_random_state": 42,
+    "use_mlflow": True
 }
 
 CONFIG["vis_dir"] = CONFIG["save_dir"] / "metrics"
@@ -42,23 +43,14 @@ def main():
     print(f"Dataset: {dataset_name}")
     print(f"Using device: {CONFIG['device']}")
 
-    # === Data ===
     etl = ETLProcessor(**CONFIG["dataset_config"])
     train_loader, val_loader, _ = etl.process()
-
-    # === Masking ===
+        
     if CONFIG["mask_size"] > 0:
-        print(f"Applying masked dataset transformation with mask ratio = {CONFIG['mask_size']}")
-        masked_train_ds = MaskedDataset(
-            train_loader.dataset,
-            CONFIG["mask_size"],
-            random_state=CONFIG["mask_random_state"],
-        )
-        masked_val_ds = MaskedDataset(
-            val_loader.dataset,
-            CONFIG["mask_size"],
-            random_state=CONFIG["mask_random_state"],
-        )
+        print(f"Applying masked dataset transformation with mask size ratio = {CONFIG['mask_size']}")
+
+        masked_train_ds = MaskedDataset(train_loader.dataset, CONFIG["mask_size"])
+        masked_val_ds = MaskedDataset(val_loader.dataset, CONFIG["mask_size"])
 
         train_loader = DataLoader(
             masked_train_ds,
@@ -68,6 +60,7 @@ def main():
             pin_memory=train_loader.pin_memory,
             drop_last=train_loader.drop_last,
         )
+
         val_loader = DataLoader(
             masked_val_ds,
             batch_size=val_loader.batch_size,
@@ -77,40 +70,28 @@ def main():
             drop_last=val_loader.drop_last,
         )
 
-    # === Grid Search ===
+
     param_combinations = list(itertools.product(*CONFIG["param_grid"].values()))
     total_configs = len(param_combinations)
+
     print(f"Total configurations to run: {total_configs}")
 
-    trainer = Trainer()
-
-    # === Training Loop ===
     for i, (layers, latent_dim) in enumerate(param_combinations):
-        model_name = (
-            f"VAE_layers{layers}_latent{latent_dim}_dataset{dataset_name}"
-            .replace(".", "")
-            .replace("/", "_")
-        )
+        model_name = f"DummyGeoVAE_layers{layers}_latent{latent_dim}_dataset{dataset_name}".replace(".", "").replace("/", "_")
         print(f"\n[{i + 1}/{total_configs}] Running: {model_name}")
 
-        # === Model ===
-        model = VAE(
+        model = DummyGeoVAE(
             input_dim=CONFIG["input_dim"],
             hidden_dim=CONFIG["hidden_dim"],
             residual_hiddens=CONFIG["residual_hiddens"],
             num_residual_layers=layers,
             latent_dim=latent_dim,
-            image_size=CONFIG["image_size"],
+            image_size=CONFIG["image_size"]
         ).to(CONFIG["device"])
 
-        # === Loss ===
         loss_fn = nn.MSELoss(reduction="sum")
 
-        # === Resume from checkpoint if exists ===
-        ckpt_files = sorted(CONFIG["save_dir"].glob(f"{model_name}_checkpoint.pt"))
-        resume_ckpt = ckpt_files[-1] if ckpt_files else None
-
-        # === Training ===
+        trainer = Trainer()
         trainer.train_supervised(
             model=model,
             epochs=CONFIG["epochs"],
@@ -123,11 +104,9 @@ def main():
             model_name=model_name,
             save_dir=CONFIG["save_dir"],
             vis_dir=CONFIG["vis_dir"],
-            use_mlflow=CONFIG["use_mlflow"],
-            resume_from_cpkt=resume_ckpt, 
+            use_mlflow=CONFIG["use_mlflow"]
         )
 
-        # === Save config ===
         config_out = {
             "model_name": model_name,
             "dataset": dataset_name,
