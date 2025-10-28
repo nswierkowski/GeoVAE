@@ -36,6 +36,7 @@ class GeoVAE(nn.Module):
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
         image_size: int = 64,
         graph_conv_type: GraphConvType = GraphConvType.GCN,
+        num_dim_gnn_layers: int = 2
     ):
         super(GeoVAE, self).__init__()
         self.device = device
@@ -67,11 +68,22 @@ class GeoVAE(nn.Module):
 
         self.dim_adj_logits = nn.Parameter(torch.randn(latent_dim, latent_dim))
         self.dim_embeddings = nn.Parameter(torch.randn(latent_dim, emb_dim))
-        self.dim_gnn_1 = ConvLayer(emb_dim, hidden_dim_gnn)
-        self.dim_gnn_2 = ConvLayer(hidden_dim_gnn, 1)
+
+        dim_layers = []
+        in_c = emb_dim
+        for i in range(num_dim_gnn_layers):
+            out_c = hidden_dim_gnn if i < num_dim_gnn_layers - 1 else 1
+            dim_layers.append(ConvLayer(in_c, out_c))
+            in_c = out_c
+        self.dim_gnn_layers = nn.ModuleList(dim_layers)
+
 
         self.tree_optimizer = GeoVAEOptimizer(
-            latent_dim=latent_dim, hidden_dim=hidden_dim_gnn, device=device
+            latent_dim=latent_dim,
+            hidden_dim=optimizer_config.get("hidden_dim", hidden_dim_gnn),
+            num_gnn_layers=optimizer_config.get("num_gnn_layers", 2),
+            graph_conv_type=optimizer_config.get("graph_conv_type", graph_conv_type.name),
+            device=device,
         )
 
         self.current_inst_edge_index = None
@@ -114,8 +126,10 @@ class GeoVAE(nn.Module):
         edge_index_dim = torch.stack([src, dst], dim=0)
 
         x_dim = self.dim_embeddings
-        x_dim = F.leaky_relu(self.dim_gnn_1(x_dim, edge_index_dim))
-        x_dim = self.dim_gnn_2(x_dim, edge_index_dim)
+        for i, conv in enumerate(self.dim_gnn_layers):
+            x_dim = conv(x_dim, edge_index_dim)
+            if i < len(self.dim_gnn_layers) - 1:
+                x_dim = F.leaky_relu(x_dim)
         dim_importance = x_dim.squeeze(1)
         return dim_importance
 

@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import numpy as np
 from torch_geometric.nn import GCNConv
 from typing import List, Tuple, Dict, Optional
+from torch_geometric.nn import GCNConv, GATConv, GraphSAGE
 
 
 class GeoVAEOptimizer(nn.Module):
@@ -17,21 +18,34 @@ class GeoVAEOptimizer(nn.Module):
         self,
         latent_dim: int,
         hidden_dim: int = 128,
-        config: dict = {},
+        num_gnn_layers: int = 2,                 
+        graph_conv_type: str = "GCN",            
         device: str = "cuda",
     ):
-        super(GeoVAEOptimizer, self).__init__()
+        super().__init__()
         self.device = device
         self.D = latent_dim
         self.hidden_dim = hidden_dim
 
-        self.gcn1 = GCNConv(latent_dim, hidden_dim)
-        self.gcn2 = GCNConv(hidden_dim, hidden_dim)
+        if graph_conv_type == "GCN":
+            ConvLayer = GCNConv
+        elif graph_conv_type == "GAT":
+            ConvLayer = lambda in_c, out_c: GATConv(in_c, out_c, heads=1, concat=False)
+        elif graph_conv_type == "GST":
+            ConvLayer = lambda in_c, out_c: GraphSAGE(in_c, out_c, num_layers=1)
+        else:
+            raise ValueError(f"Unsupported graph_conv_type: {graph_conv_type}")
+
+        layers = []
+        in_dim = latent_dim
+        for _ in range(num_gnn_layers):
+            layers.append(ConvLayer(in_dim, hidden_dim))
+            in_dim = hidden_dim
+        self.gnn_layers = nn.ModuleList(layers)
 
         self.score_mlp = nn.Sequential(
             nn.Linear(2 * hidden_dim, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, 1)
         )
-
         self.gamma_mlp = nn.Sequential(
             nn.Linear(2 * hidden_dim, hidden_dim),
             nn.ReLU(),
@@ -99,8 +113,9 @@ class GeoVAEOptimizer(nn.Module):
         B = mu.size(0)
         device = self.device
 
-        h = F.relu(self.gcn1(mu, current_edge_index))
-        h = F.relu(self.gcn2(h, current_edge_index))
+        h = mu
+        for layer in self.gnn_layers:
+            h = F.relu(layer(h, current_edge_index))
 
         scores = torch.zeros((B, B), device=device)
         for i in range(B):

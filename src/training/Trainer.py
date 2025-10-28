@@ -318,7 +318,7 @@ class Trainer:
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 torch.save(model.state_dict(), best_model_path)
-                print(f"💾 New best model saved at epoch {epoch + 1}: val_loss={val_loss:.6f}")
+                print(f"New best model saved at epoch {epoch + 1}: val_loss={val_loss:.6f}")
 
             # --- Save checkpoint every N epochs ---
             if (epoch + 1) % checkpoint_every == 0:
@@ -329,16 +329,14 @@ class Trainer:
                     "optimizer_state_dict": optimizer.state_dict(),
                     "best_val_loss": best_val_loss,
                 }, checkpoint_to_save)
-                print(f"📦 Checkpoint saved at epoch {epoch + 1} -> {checkpoint_to_save}")
+                print(f"Checkpoint saved at epoch {epoch + 1} -> {checkpoint_to_save}")
 
-            # --- Log to MLflow ---
             if use_mlflow:
                 mlflow.log_metric("train_loss", train_metrics["loss"][-1], step=epoch)
                 mlflow.log_metric("val_loss", val_metrics["loss"][-1], step=epoch)
                 mlflow.log_metric("train_mse", train_metrics["mse"][-1], step=epoch)
                 mlflow.log_metric("val_mse", val_metrics["mse"][-1], step=epoch)
 
-        # --- Plot & log results ---
         self.plot_metrics(train_metrics, val_metrics, vis_dir, model_name)
 
         if use_mlflow:

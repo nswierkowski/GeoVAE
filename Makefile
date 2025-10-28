@@ -1,6 +1,9 @@
 run_etl:
 	PYTHONPATH=. python src/scripts/etl_process/run_etl.py
 
+show_tunning:
+	PYTHONPATH=. python src/scripts/tunning/show_tunning.py
+
 etl_mnist:
 	PYTHONPATH=. python src/scripts/etl_process/run_etl.py mnist
 
@@ -39,3 +42,6 @@ test:
 
 run_multiple:
 	PYTHONPATH=. python src/scripts/reconstruction/run_multiple.py
+
+tunning_geovae:
+	PYTHONPATH=. python src/scripts/tunning/run_geovae_tunning.py
