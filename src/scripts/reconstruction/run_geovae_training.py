@@ -11,7 +11,7 @@ from src.training.MaskDataset import MaskedDataset
 from src.training.Trainer import Trainer
 
 
-CONFIG = {
+DEFAULT_CONFIG = {
     "input_dim": 3,
     "hidden_dim": 180,
     "residual_hiddens": 64,
@@ -43,33 +43,31 @@ CONFIG = {
     "mask_random_state": 42,
 }
 
-CONFIG["vis_dir"] = CONFIG["save_dir"] / "metrics"
-CONFIG["save_dir"].mkdir(parents=True, exist_ok=True)
-CONFIG["vis_dir"].mkdir(parents=True, exist_ok=True)
+DEFAULT_CONFIG["vis_dir"] = DEFAULT_CONFIG["save_dir"] / "metrics"
+DEFAULT_CONFIG["save_dir"].mkdir(parents=True, exist_ok=True)
+DEFAULT_CONFIG["vis_dir"].mkdir(parents=True, exist_ok=True)
 
 
-def main():
-    dataset_name = CONFIG["dataset_config"]["dataset_name"]
+def main(config):
+    dataset_name = config["dataset_config"]["dataset_name"]
     print("Preparing data...")
     print(f"Dataset: {dataset_name}")
-    print(f"Using device: {CONFIG['device']}")
+    print(f"Using device: {config['device']}")
 
-    # === Data ===
-    etl = ETLProcessor(**CONFIG["dataset_config"])
+    etl = ETLProcessor(**config["dataset_config"])
     train_loader, val_loader, _ = etl.process()
 
-    # === Masking ===
-    if CONFIG["mask_size"] > 0:
-        print(f"Applying masked dataset transformation with mask ratio = {CONFIG['mask_size']}")
+    if config["mask_size"] > 0:
+        print(f"Applying masked dataset transformation with mask ratio = {config['mask_size']}")
         masked_train_ds = MaskedDataset(
             train_loader.dataset,
-            CONFIG["mask_size"],
-            random_state=CONFIG["mask_random_state"],
+            config["mask_size"],
+            random_state=config["mask_random_state"],
         )
         masked_val_ds = MaskedDataset(
             val_loader.dataset,
-            CONFIG["mask_size"],
-            random_state=CONFIG["mask_random_state"],
+            config["mask_size"],
+            random_state=config["mask_random_state"],
         )
 
         train_loader = DataLoader(
@@ -89,8 +87,7 @@ def main():
             drop_last=val_loader.drop_last,
         )
 
-    # === Grid Search ===
-    param_combinations = list(itertools.product(*CONFIG["param_grid"].values()))
+    param_combinations = list(itertools.product(*config["param_grid"].values()))
     total_configs = len(param_combinations)
     print(f"Total configurations to run: {total_configs}")
 
@@ -114,56 +111,52 @@ def main():
 
         print(f"\n[{i + 1}/{total_configs}] Running: {model_name}")
 
-        # === Model ===
         model = GeoVAE(
-            input_dim=CONFIG["input_dim"],
-            hidden_dim=CONFIG["hidden_dim"],
-            residual_hiddens=CONFIG["residual_hiddens"],
+            input_dim=config["input_dim"],
+            hidden_dim=config["hidden_dim"],
+            residual_hiddens=config["residual_hiddens"],
             num_residual_layers=num_res_layers,
             latent_dim=latent_dim,
-            hidden_dim_gnn=CONFIG["optimizer_config"]["hidden_dim"],
+            hidden_dim_gnn=config["optimizer_config"]["hidden_dim"],
             num_inst_gnn_layers=num_inst_gnn_layers,
             num_dim_gnn_layers=num_dim_gnn_layers,
-            optimizer_config=CONFIG["optimizer_config"],
+            optimizer_config=config["optimizer_config"],
             graph_conv_type=graph_conv,
-            device=CONFIG["device"],
-            image_size=CONFIG["image_size"],
-        ).to(CONFIG["device"])
+            device=config["device"],
+            image_size=config["image_size"],
+        ).to(config["device"])
 
         loss_fn = nn.MSELoss(reduction="sum")
 
-        # === Resume from checkpoint if exists ===
-        ckpt_files = sorted(CONFIG["save_dir"].glob(f"{model_name}_checkpoint.pt"))
+        ckpt_files = sorted(config["save_dir"].glob(f"{model_name}_checkpoint.pt"))
         resume_ckpt = ckpt_files[-1] if ckpt_files else None
 
-        # === Training ===
         trainer.train_supervised(
             model=model,
-            epochs=CONFIG["epochs"],
+            epochs=config["epochs"],
             train_loader=train_loader,
             val_loader=val_loader,
-            lr=CONFIG["lr"],
-            weight_decay=CONFIG["weight_decay"],
-            mask_ratio=CONFIG["mask_size"],
+            lr=config["lr"],
+            weight_decay=config["weight_decay"],
+            mask_ratio=config["mask_size"],
             loss_fn=loss_fn,
             model_name=model_name,
-            save_dir=CONFIG["save_dir"],
-            vis_dir=CONFIG["vis_dir"],
-            use_mlflow=CONFIG["use_mlflow"],
+            save_dir=config["save_dir"],
+            vis_dir=config["vis_dir"],
+            use_mlflow=config["use_mlflow"],
             resume_from_cpkt=resume_ckpt,
         )
 
-        # === Save config ===
         config_out = {
             "model_name": model_name,
             "dataset": dataset_name,
-            "config": CONFIG,
+            "config": config,
         }
-        with open(CONFIG["save_dir"] / f"{model_name}_config.json", "w") as f:
+        with open(config["save_dir"] / f"{model_name}_config.json", "w") as f:
             json.dump(config_out, f, indent=4, default=str)
 
     print("Training and visualization complete.")
 
 
 if __name__ == "__main__":
-    main()
+    main(DEFAULT_CONFIG)

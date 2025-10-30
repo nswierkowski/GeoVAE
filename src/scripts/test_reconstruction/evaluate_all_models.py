@@ -7,7 +7,7 @@ import pandas as pd
 from torch.utils.data import DataLoader
 
 from src.models.geovae.geovae import GeoVAE
-from src.models.dummy_geovae.geovae import DummyGeoVAE
+from src.models.dummy_geovae.dummy_geovae import DummyGeoVAE
 from src.models.vae.vae import VAE
 from src.scripts.test_reconstruction.Evaluator import Evaluator
 from src.models.vqvae.vqvae import VQVAE

@@ -1,3 +1,4 @@
+import json
 import time
 from typing import Callable, Dict, List, Tuple
 from matplotlib import pyplot as plt
@@ -75,7 +76,7 @@ class Trainer:
 
         for x_batch, target in tqdm(train_loader, desc="Training"):
             x_batch = x_batch.to(model.device)
-            target = target.to(model.device)  # target = original image
+            target = target.to(model.device) 
             x_masked = x_batch.clone()
             x_masked = self._apply_random_mask(x_masked, mask_ratio)
             optimizer.zero_grad()
@@ -255,7 +256,6 @@ class Trainer:
         """
         os.makedirs(save_dir, exist_ok=True)
 
-        # --- Paths setup ---
         default_cpkt_path = os.path.join(save_dir, f"{model_name}_checkpoint.pt")
         best_model_path = os.path.join(save_dir, f"{model_name}.pt")
 
@@ -263,28 +263,25 @@ class Trainer:
             resume_from_cpkt if resume_from_cpkt is not None else default_cpkt_path
         )
 
-        # --- Initialize optimizer and metrics ---
         optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
         train_metrics, val_metrics = self._initialize_metrics()
         start_epoch = 0
         best_val_loss = float("inf")
 
-        # --- Load checkpoint if requested ---
         if resume or resume_from_cpkt is not None:
             if os.path.exists(checkpoint_path):
-                print(f"🔁 Resuming training from checkpoint: {checkpoint_path}")
+                print(f"Resuming training from checkpoint: {checkpoint_path}")
                 checkpoint = torch.load(checkpoint_path, map_location=model.device)
                 model.load_state_dict(checkpoint["model_state_dict"])
                 optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
                 start_epoch = checkpoint["epoch"] + 1
                 best_val_loss = checkpoint.get("best_val_loss", float("inf"))
                 print(
-                    f"✅ Resumed from epoch {start_epoch}, best_val_loss={best_val_loss:.6f}"
+                    f"Resumed from epoch {start_epoch}, best_val_loss={best_val_loss:.6f}"
                 )
             else:
-                print(f"⚠️ Checkpoint not found: {checkpoint_path}. Starting from scratch.")
+                print(f"Checkpoint not found: {checkpoint_path}. Starting from scratch.")
 
-        # --- MLflow setup ---
         if use_mlflow:
             mlflow.start_run(run_name=model_name)
             mlflow.log_params({
@@ -299,7 +296,6 @@ class Trainer:
 
         writer = SummaryWriter(log_dir=f"logs/{model_name}", flush_secs=30) if tensorboard else None
 
-        # --- Training loop ---
         for epoch in range(start_epoch, epochs):
             print(f"Epoch {epoch + 1}/{epochs}")
             start_time = time.time()
@@ -314,13 +310,11 @@ class Trainer:
             train_metrics["step"].append(epoch)
             val_metrics["step"].append(epoch)
 
-            # --- Save best model ---
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 torch.save(model.state_dict(), best_model_path)
                 print(f"New best model saved at epoch {epoch + 1}: val_loss={val_loss:.6f}")
 
-            # --- Save checkpoint every N epochs ---
             if (epoch + 1) % checkpoint_every == 0:
                 checkpoint_to_save = os.path.join(save_dir, f"{model_name}_checkpoint.pt")
                 torch.save({
@@ -344,3 +338,27 @@ class Trainer:
             metrics_plot_path = os.path.join(vis_dir, f"{model_name}_metrics.png")
             mlflow.log_artifact(metrics_plot_path)
             mlflow.end_run()
+            
+        metrics_save_path = os.path.join(save_dir, f"{model_name}_metrics.json")
+        epoch_data = {
+            "epoch": epoch + 1,
+            "train_loss": train_metrics["loss"][-1],
+            "val_loss": val_metrics["loss"][-1],
+            "train_mse": train_metrics["mse"][-1],
+            "val_mse": val_metrics["mse"][-1],
+            "train_partial_loss": train_metrics["partial_loss"][-1],
+            "val_partial_loss": val_metrics["partial_loss"][-1],
+            "train_num_active_dims": train_metrics["num_active_dims"][-1],
+            "val_num_active_dims": val_metrics["num_active_dims"][-1],
+            "train_time": train_metrics["time"][-1],
+            "val_time": val_metrics["time"][-1],
+        }
+
+        if os.path.exists(metrics_save_path):
+            with open(metrics_save_path, "r") as f:
+                data = json.load(f)
+        else:
+            data = []
+        data.append(epoch_data)
+        with open(metrics_save_path, "w") as f:
+            json.dump(data, f, indent=4)

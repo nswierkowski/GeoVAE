@@ -5,13 +5,13 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from src.models.dummy_geovae.geovae import DummyGeoVAE
+from src.models.dummy_geovae.dummy_geovae import DummyGeoVAE  
 from src.scripts.etl_process.ETLProcessor import ETLProcessor
 from src.training.MaskDataset import MaskedDataset
 from src.training.Trainer import Trainer
 
 
-CONFIG = {
+DEFAULT_CONFIG = {
     "input_dim": 3,
     "hidden_dim": 128,
     "residual_hiddens": 64,
@@ -24,99 +24,118 @@ CONFIG = {
     "param_grid": {"num_residual_layers": [1], "latent_dim": [64]},
     "save_dir": Path("models/reconstruction/dummy_geovae/"),
     "dataset_config": {
-        # Can be benchmark ("mnist", "fmnist", "stl10", "reuters") or Kaggle ("mahmudulhaqueshawon/cat-image")
         "dataset_name": "mahmudulhaqueshawon/cat-image",
         "raw_dir": "data/raw_data/cats/raw",
         "split_dir": "data/data_splits/cats",
     },
-    "use_mlflow": True
+    "use_mlflow": True,
+    "mask_random_state": 42,
+
+    "match_graph_config": {
+        "hidden_dim_gnn": 64,
+        "num_inst_gnn_layers": 2,
+        "num_dim_gnn_layers": 2,
+    },
 }
 
-CONFIG["vis_dir"] = CONFIG["save_dir"] / "metrics"
-CONFIG["save_dir"].mkdir(parents=True, exist_ok=True)
-CONFIG["vis_dir"].mkdir(parents=True, exist_ok=True)
+DEFAULT_CONFIG["vis_dir"] = DEFAULT_CONFIG["save_dir"] / "metrics"
+DEFAULT_CONFIG["save_dir"].mkdir(parents=True, exist_ok=True)
+DEFAULT_CONFIG["vis_dir"].mkdir(parents=True, exist_ok=True)
 
 
-def main():
-    dataset_name = CONFIG["dataset_config"]["dataset_name"]
+def main(config):
+    dataset_name = config["dataset_config"]["dataset_name"]
     print("Preparing data...")
     print(f"Dataset: {dataset_name}")
-    print(f"Using device: {CONFIG['device']}")
+    print(f"Using device: {config['device']}")
 
-    etl = ETLProcessor(**CONFIG["dataset_config"])
+    etl = ETLProcessor(**config["dataset_config"])
     train_loader, val_loader, _ = etl.process()
-        
-    if CONFIG["mask_size"] > 0:
-        print(f"Applying masked dataset transformation with mask size ratio = {CONFIG['mask_size']}")
 
-        masked_train_ds = MaskedDataset(train_loader.dataset, CONFIG["mask_size"])
-        masked_val_ds = MaskedDataset(val_loader.dataset, CONFIG["mask_size"])
+    if config["mask_size"] > 0:
+        print(f"Applying masked dataset transformation with mask ratio = {config['mask_size']}")
+        masked_train_ds = MaskedDataset(
+            train_loader.dataset,
+            config["mask_size"],
+            random_state=config["mask_random_state"],
+        )
+        masked_val_ds = MaskedDataset(
+            val_loader.dataset,
+            config["mask_size"],
+            random_state=config["mask_random_state"],
+        )
 
         train_loader = DataLoader(
             masked_train_ds,
             batch_size=train_loader.batch_size,
             shuffle=True,
             num_workers=train_loader.num_workers,
-            pin_memory=train_loader.pin_memory,
-            drop_last=train_loader.drop_last,
+            pin_memory=True,
+            drop_last=True,
         )
-
         val_loader = DataLoader(
             masked_val_ds,
             batch_size=val_loader.batch_size,
             shuffle=False,
             num_workers=val_loader.num_workers,
-            pin_memory=val_loader.pin_memory,
-            drop_last=val_loader.drop_last,
+            pin_memory=True,
+            drop_last=True,
         )
 
-
-    param_combinations = list(itertools.product(*CONFIG["param_grid"].values()))
+    param_combinations = list(itertools.product(*config["param_grid"].values()))
     total_configs = len(param_combinations)
-
     print(f"Total configurations to run: {total_configs}")
 
+    trainer = Trainer()
+
     for i, (layers, latent_dim) in enumerate(param_combinations):
-        model_name = f"DummyGeoVAE_layers{layers}_latent{latent_dim}_dataset{dataset_name}".replace(".", "").replace("/", "_")
+        model_name = (
+            f"DummyGeoVAE_layers{layers}_latent{latent_dim}_dataset{dataset_name}"
+            .replace(".", "")
+            .replace("/", "_")
+        )
         print(f"\n[{i + 1}/{total_configs}] Running: {model_name}")
 
         model = DummyGeoVAE(
-            input_dim=CONFIG["input_dim"],
-            hidden_dim=CONFIG["hidden_dim"],
-            residual_hiddens=CONFIG["residual_hiddens"],
+            input_dim=config["input_dim"],
+            hidden_dim=config["hidden_dim"],
+            residual_hiddens=config["residual_hiddens"],
             num_residual_layers=layers,
             latent_dim=latent_dim,
-            image_size=CONFIG["image_size"]
-        ).to(CONFIG["device"])
-
+            image_size=config["image_size"],
+            match_graph_config=config.get("match_graph_config", None),  
+        ).to(config["device"])
+        
+        
         loss_fn = nn.MSELoss(reduction="sum")
 
-        trainer = Trainer()
+        
         trainer.train_supervised(
             model=model,
-            epochs=CONFIG["epochs"],
+            epochs=config["epochs"],
             train_loader=train_loader,
             val_loader=val_loader,
-            lr=CONFIG["lr"],
-            weight_decay=CONFIG["weight_decay"],
-            mask_ratio=CONFIG["mask_size"],
+            lr=config["lr"],
+            weight_decay=config["weight_decay"],
+            mask_ratio=config["mask_size"],
             loss_fn=loss_fn,
             model_name=model_name,
-            save_dir=CONFIG["save_dir"],
-            vis_dir=CONFIG["vis_dir"],
-            use_mlflow=CONFIG["use_mlflow"]
+            save_dir=config["save_dir"],
+            vis_dir=config["vis_dir"],
+            use_mlflow=config["use_mlflow"],
         )
 
+        
         config_out = {
             "model_name": model_name,
             "dataset": dataset_name,
-            "config": CONFIG,
+            "config": config,
         }
-        with open(CONFIG["save_dir"] / f"{model_name}_config.json", "w") as f:
+        with open(config["save_dir"] / f"{model_name}_config.json", "w") as f:
             json.dump(config_out, f, indent=4, default=str)
 
     print("Training and visualization complete.")
 
 
 if __name__ == "__main__":
-    main()
+    main(DEFAULT_CONFIG)
